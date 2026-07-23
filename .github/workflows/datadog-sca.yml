@@ -35,6 +35,19 @@ jobs:
         with:
           version: v5.12.1
 
+      - name: Load attribution metadata
+        run: |
+          set -euo pipefail
+          # SECURITY: dd-git.env carries fork-controlled values. Do NOT `source`
+          # it (that would let a crafted author name execute code in this
+          # secrets-bearing job). Instead, whitelist DD_* keys and write each
+          # line verbatim to $GITHUB_ENV with no shell evaluation.
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+              DD_GIT_*=*|DD_PR_NUMBER=*) printf '%s\n' "$line" >> "$GITHUB_ENV" ;;
+            esac
+          done < dd-git.env
+
       - name: Upload SBOM to Datadog
         env:
           DD_API_KEY: ${{ secrets.DD_API_KEY }}
@@ -42,12 +55,9 @@ jobs:
           DD_SITE: datadoghq.com
         run: |
           set -euo pipefail
-          # DD_GIT_* / DD_PR_NUMBER from the scan job override the (wrong)
-          # git context of this workflow_run so findings attach to the PR
+          # DD_GIT_* / DD_PR_NUMBER (loaded above) override the wrong git
+          # context of this workflow_run so findings attach to the PR
           # commit/branch rather than this repo's default branch.
-          set -a
-          . ./dd-git.env
-          set +a
           echo "Uploading SBOM for ${DD_GIT_BRANCH:-?}@${DD_GIT_COMMIT_SHA:-?} (PR #${DD_PR_NUMBER:-n/a})"
           datadog-ci sbom upload \
             --source github-action \

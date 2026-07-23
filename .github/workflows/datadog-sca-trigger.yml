@@ -16,8 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     name: Generate SBOM
     steps:
-      - name: Checkout
+      - name: Checkout PR head commit
         uses: actions/checkout@v6
+        with:
+          # Check out the PR head commit itself (not the synthetic merge commit
+          # that pull_request checks out by default) so the SBOM and the git
+          # metadata below both describe the same commit we attribute to.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install datadog-sbom-generator
         env:
@@ -63,10 +68,21 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
+          set -euo pipefail
+          # Author/committer identity is read from the checked-out HEAD (the PR
+          # head commit). datadog-ci requires these fields. The commit message
+          # is intentionally omitted: it is not required and is the most
+          # attacker-controllable, newline-bearing field.
           {
             echo "DD_GIT_REPOSITORY_URL=https://github.com/${BASE_REPO}.git"
             echo "DD_GIT_COMMIT_SHA=${HEAD_SHA}"
             echo "DD_GIT_BRANCH=${HEAD_REF}"
+            echo "DD_GIT_COMMIT_AUTHOR_NAME=$(git show -s --format=%an HEAD)"
+            echo "DD_GIT_COMMIT_AUTHOR_EMAIL=$(git show -s --format=%ae HEAD)"
+            echo "DD_GIT_COMMIT_AUTHOR_DATE=$(git show -s --format=%aI HEAD)"
+            echo "DD_GIT_COMMIT_COMMITTER_NAME=$(git show -s --format=%cn HEAD)"
+            echo "DD_GIT_COMMIT_COMMITTER_EMAIL=$(git show -s --format=%ce HEAD)"
+            echo "DD_GIT_COMMIT_COMMITTER_DATE=$(git show -s --format=%cI HEAD)"
             if [ "${EVENT_NAME}" = "pull_request" ]; then
               echo "DD_PR_NUMBER=${PR_NUMBER}"
               echo "DD_GIT_PULL_REQUEST_BASE_BRANCH=${BASE_REF}"
