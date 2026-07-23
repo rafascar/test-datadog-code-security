@@ -1,14 +1,15 @@
 name: Datadog Software Composition Analysis
 
-# Runs in the BASE repo context after the trigger workflow completes, so it has
-# access to secrets even for fork PRs. It checks out the PR head commit reported
-# by the trigger workflow and runs the SCA scan against it.
+# Runs in the BASE repo context after the scan workflow completes, so it has
+# access to secrets even for fork PRs. It downloads the SBOM produced by the
+# untrusted job and uploads it to Datadog. It never checks out fork code, so
+# there is no "pwn request" exposure and no untrusted code runs here.
 #
-# NOTE: workflow_run only ever runs the copy of this file that exists on the
-# default branch. It will not fire until this file is merged to main.
+# NOTE: workflow_run only ever runs the copy of this file on the default
+# branch. It will not fire until this file is merged to main.
 on:
   workflow_run:
-    workflows: ["Datadog SCA (trigger)"]
+    workflows: ["Datadog SCA (scan)"]
     types: [completed]
 
 permissions:
@@ -16,40 +17,40 @@ permissions:
   actions: read # required to download the artifact from the triggering run
 
 jobs:
-  software-composition-analysis:
+  upload-sbom:
     runs-on: ubuntu-latest
-    name: Datadog SBOM Generation and Upload
-    # Only scan when the trigger workflow succeeded.
+    name: Upload SBOM to Datadog
+    # Only upload when the scan workflow succeeded.
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - name: Download scan metadata
+      - name: Download SBOM and metadata
         uses: actions/download-artifact@v4
         with:
-          name: scan-metadata
+          name: datadog-sbom
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Load metadata
-        id: meta
-        run: cat scan-metadata.env >> "$GITHUB_OUTPUT"
-
-      - name: Checkout PR head commit
-        uses: actions/checkout@v6
+      - name: Install datadog-ci
+        uses: DataDog/install-datadog-ci-github-action@6d7f0c7c5402a4b1912055b76970ca76bef71fe5 # v1.0.4
         with:
-          repository: ${{ steps.meta.outputs.head_repo }}
-          ref: ${{ steps.meta.outputs.head_sha }}
-          persist-credentials: false
+          version: v5.12.1
 
-      - name: Restore branch name for correct Datadog attribution
-        # The action reads git state straight from the workspace. Recreating the
-        # branch pointer at the head commit makes findings attach to the PR's
-        # source branch instead of a detached HEAD.
-        run: git checkout -B "${{ steps.meta.outputs.head_ref }}"
-
-      - name: Check imported libraries are secure and compliant
-        id: datadog-software-composition-analysis
-        uses: DataDog/datadog-sca-github-action@main
-        with:
-          dd_api_key: ${{ secrets.DD_API_KEY }}
-          dd_app_key: ${{ secrets.DD_APP_KEY }}
-          dd_site: datadoghq.com
+      - name: Upload SBOM to Datadog
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          DD_SITE: datadoghq.com
+        run: |
+          set -euo pipefail
+          # DD_GIT_* / DD_PR_NUMBER from the scan job override the (wrong)
+          # git context of this workflow_run so findings attach to the PR
+          # commit/branch rather than this repo's default branch.
+          set -a
+          . ./dd-git.env
+          set +a
+          echo "Uploading SBOM for ${DD_GIT_BRANCH:-?}@${DD_GIT_COMMIT_SHA:-?} (PR #${DD_PR_NUMBER:-n/a})"
+          datadog-ci sbom upload \
+            --source github-action \
+            --service datadog-sbom-generator \
+            --env ci \
+            sbom.json
