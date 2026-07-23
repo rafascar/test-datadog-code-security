@@ -1,14 +1,51 @@
-on: [push, pull_request]
-
 name: Datadog Software Composition Analysis
+
+# Runs in the BASE repo context after the trigger workflow completes, so it has
+# access to secrets even for fork PRs. It checks out the PR head commit reported
+# by the trigger workflow and runs the SCA scan against it.
+#
+# NOTE: workflow_run only ever runs the copy of this file that exists on the
+# default branch. It will not fire until this file is merged to main.
+on:
+  workflow_run:
+    workflows: ["Datadog SCA (trigger)"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read # required to download the artifact from the triggering run
 
 jobs:
   software-composition-analysis:
     runs-on: ubuntu-latest
     name: Datadog SBOM Generation and Upload
+    # Only scan when the trigger workflow succeeded.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - name: Checkout
+      - name: Download scan metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: scan-metadata
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load metadata
+        id: meta
+        run: cat scan-metadata.env >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR head commit
         uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.meta.outputs.head_repo }}
+          ref: ${{ steps.meta.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Restore branch name for correct Datadog attribution
+        # The action reads git state straight from the workspace. Recreating the
+        # branch pointer at the head commit makes findings attach to the PR's
+        # source branch instead of a detached HEAD.
+        run: git checkout -B "${{ steps.meta.outputs.head_ref }}"
+
       - name: Check imported libraries are secure and compliant
         id: datadog-software-composition-analysis
         uses: DataDog/datadog-sca-github-action@main

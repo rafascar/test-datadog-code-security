@@ -1,0 +1,41 @@
+name: Datadog SCA (trigger)
+
+# Runs in the PR/fork context. This job intentionally has NO access to secrets
+# (GitHub withholds them from fork pull_request events). It only records the
+# metadata the trusted scanner needs and hands it off via an artifact.
+on:
+  push:
+  pull_request:
+
+jobs:
+  collect-metadata:
+    runs-on: ubuntu-latest
+    name: Collect scan metadata
+    steps:
+      - name: Save scan metadata
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Fork PR -> the fork repo + tip of the fork branch. Push -> this repo + pushed sha.
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          mkdir -p metadata
+          {
+            echo "event_name=${EVENT_NAME}"
+            echo "pr_number=${PR_NUMBER}"
+            echo "head_repo=${HEAD_REPO}"
+            echo "head_sha=${HEAD_SHA}"
+            echo "head_ref=${HEAD_REF}"
+            echo "base_ref=${BASE_REF}"
+          } > metadata/scan-metadata.env
+          cat metadata/scan-metadata.env
+
+      - name: Upload scan metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-metadata
+          path: metadata/
+          retention-days: 1
